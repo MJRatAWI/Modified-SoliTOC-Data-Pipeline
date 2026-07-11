@@ -50,3 +50,6 @@ attr = "my_pipeline.__version__"
 [tool.setuptools.packages.find]
 where = [ "src",]
 namespaces = false
+
+[tool.kedro_telemetry]
+project_id = "8e79cfb5b94a48b1b83de4f9fb62638c"
