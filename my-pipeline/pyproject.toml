@@ -7,7 +7,14 @@ requires-python = ">=3.9"
 name = "my_pipeline"
 readme = "README.md"
 dynamic = [ "version",]
-dependencies = [ "ipython>=8.10", "jupyterlab>=3.0", "notebook", "kedro~=1.0.0",]
+dependencies = [
+ "ipython>=8.10",
+ "jupyterlab>=3.0",
+ "notebook",
+ "kedro~=1.0.0",
+ "pandas>=2.3.3",
+ "numpy>=2.0.2",
+]
 
 [project.scripts]
 my-pipeline = "my_pipeline.__main__:main"
