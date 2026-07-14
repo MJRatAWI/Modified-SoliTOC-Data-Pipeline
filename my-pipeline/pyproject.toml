@@ -3,7 +3,7 @@ requires = [ "setuptools",]
 build-backend = "setuptools.build_meta"
 
 [project]
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 name = "my_pipeline"
 readme = "README.md"
 dynamic = [ "version",]
@@ -14,6 +14,7 @@ dependencies = [
  "kedro~=1.0.0",
  "pandas>=2.3.3",
  "numpy>=2.0.2",
+ "plotly>=5.24.0",
 ]
 
 [project.scripts]

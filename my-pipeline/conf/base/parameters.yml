@@ -1,0 +1,29 @@
+analysis:
+  input_dir: data/01_input/test_data
+  output_dir: data/08_reporting/zone_analysis
+  batch_summary_name: batch_summary
+  time_col_index: 0
+  temp_col_index: 1
+  co2_col_index: -1
+  flow_col_index: 5
+  baseline_mode: manual
+  manual_baseline:
+    - 800
+    - 1800
+  fixed_baseline:
+    - 1200.0
+    - 1800.0
+  auto_search_range:
+    - null
+    - null
+  auto_window_size: 600
+  fixed_val: 1000.0
+  shift: 88
+  shift_co2: true
+  integration_start: 1800
+  factor: 0.000012563
+  interp_every: 100
+  extrap_rate: 0.01
+  cutoff_temp: 898.0
+  zone_plateau_min_duration: 60.0
+  zone_flow_relative_increase: 0.25
