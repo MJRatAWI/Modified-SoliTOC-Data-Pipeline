@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from my_pipeline.nodes.nodes import detect_zone_boundaries, parse_program_metadata, parse_solitoc_txt_to_df
-
+from my_pipeline.nodes.nodes import (
+    detect_zone_boundaries,
+    parse_program_metadata,
+    parse_solitoc_txt_to_df,
+)
 
 TEST_DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "01_input" / "test_data"
 
@@ -21,7 +24,7 @@ def test_zone_boundaries_are_ordered_for_sample_files() -> None:
         )["times"]
         ordered = [
             boundaries["Start-Run"],
-            boundaries["Start-Rampe"],
+            boundaries["Start-Ramp"],
             boundaries["Start-Plateau"],
             boundaries["Start-Oxidation"],
             boundaries["End-Run"],
@@ -42,7 +45,7 @@ def test_zone_boundaries_follow_metadata_rules() -> None:
         )["times"]
 
         if meta.get("b_d3_time_s") is not None:
-            assert abs(boundaries["Start-Rampe"] - float(meta["b_d3_time_s"])) <= 1.0
+            assert abs(boundaries["Start-Ramp"] - float(meta["b_d3_time_s"])) <= 1.0
         if meta.get("c4_s") is not None:
             delta = boundaries["Start-Oxidation"] - boundaries["Start-Plateau"]
             assert abs(delta - float(meta["c4_s"])) <= 1.0

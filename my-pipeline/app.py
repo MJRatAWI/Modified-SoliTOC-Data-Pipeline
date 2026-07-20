@@ -1,13 +1,12 @@
 import os
-import re
 import sys
 import tempfile
 import tkinter as tk
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 from tkinter import filedialog, messagebox, ttk
-from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -23,24 +22,22 @@ from my_pipeline.nodes.nodes import (  # noqa: E402
     DEFAULT_AUTO_WINDOW,
     DEFAULT_BASELINE_END,
     DEFAULT_BASELINE_START,
-    DEFAULT_CUTOFF_TEMP,
-    DEFAULT_EXTRAP_RATE,
     DEFAULT_FACTOR,
     DEFAULT_FIXED_BASELINE,
     DEFAULT_FIXED_VAL,
     DEFAULT_FLOW_COL_IDX,
     DEFAULT_INTERP_EVERY,
+    DEFAULT_MAX_ENERGY_TEMP,
     DEFAULT_PREVIEW,
     DEFAULT_SHIFT,
-    DEFAULT_INTEGRATION_START,
     DEFAULT_ZONE_FLOW_RELATIVE_INCREASE,
-    DEFAULT_ZONE_WINDOW,
     OUT_SUBDIRS,
     compute_baseline_and_preview_data,
     detect_zone_boundaries,
-    get_unique_output_path,
+    format_batch_summary_row,
     parse_program_metadata,
     process_file,
+    write_batch_exports,
 )
 
 
@@ -83,16 +80,18 @@ class ToolTip:
             self.tip_window = None
 
 
-def show_preview_modal(
+def show_preview_modal(  # noqa: PLR0913, PLR0915
     root: tk.Tk,
     time: np.ndarray,
     co2_raw: np.ndarray,
+    temp_raw: np.ndarray,
     baseline_val: float,
     bi0: int,
     bi1: int,
     filename: str,
     omit_below: float = 100.0,
-    zone_timepoints: Optional[dict[str, float]] = None,
+    preview_shift_seconds: float = 0.0,
+    zone_timepoints: dict[str, float] | None = None,
 ) -> bool:
     """Display a preview window with a baseline plot before processing."""
     win = tk.Toplevel(root)
@@ -111,14 +110,18 @@ def show_preview_modal(
     )
     lbl.pack(anchor="w", padx=8, pady=(8, 2))
 
-    info_label = ttk.Label(win, text="Use the Continue or Skip buttons in the browser window to proceed.")
+    info_label = ttk.Label(
+        win, text="Use the Continue or Skip buttons in the browser window to proceed."
+    )
     info_label.pack(padx=8, pady=(4, 8))
 
     co2_arr = np.array(co2_raw, dtype=float)
     mask_ok = (~np.isnan(co2_arr)) & (co2_arr >= omit_below)
 
     if np.sum(mask_ok) == 0:
-        msg = ttk.Label(win, text=f"No CO2 values >= {omit_below} present — nothing to preview.")
+        msg = ttk.Label(
+            win, text=f"No CO2 values >= {omit_below} present — nothing to preview."
+        )
         msg.pack(padx=8, pady=8)
         result = {"choice": None}
 
@@ -131,11 +134,19 @@ def show_preview_modal(
         return bool(result["choice"])
 
     time_plot, co2_plot = time[mask_ok], co2_arr[mask_ok]
-    minpos = np.nanmin(co2_plot[np.isfinite(co2_plot)]) if np.any(np.isfinite(co2_plot)) else None
+    minpos = (
+        np.nanmin(co2_plot[np.isfinite(co2_plot)])
+        if np.any(np.isfinite(co2_plot))
+        else None
+    )
     offset = 0.0
 
     if minpos is None or minpos <= 0:
-        sd = float(np.nanstd(co2_plot[np.isfinite(co2_plot)])) if np.any(np.isfinite(co2_plot)) else 1.0
+        sd = (
+            float(np.nanstd(co2_plot[np.isfinite(co2_plot)]))
+            if np.any(np.isfinite(co2_plot))
+            else 1.0
+        )
         offset = max(1e-6, 0.01 * sd)
 
     co2_for_log = co2_plot + offset
@@ -147,6 +158,20 @@ def show_preview_modal(
             mode="lines",
             name=f"CO2 (>= {omit_below}) + offset",
             line=dict(color="#1f77b4", width=1.5),
+        )
+    )
+
+    temp_arr = np.asarray(temp_raw, dtype=float)
+    temp_plot = temp_arr[mask_ok]
+    temp_time_plot = time_plot + float(preview_shift_seconds)
+    fig.add_trace(
+        go.Scatter(
+            x=temp_time_plot,
+            y=temp_plot,
+            mode="lines",
+            name="Temperature (raw, visual shift)",
+            line=dict(color="#d62728", width=1.2),
+            yaxis="y2",
         )
     )
 
@@ -179,7 +204,7 @@ def show_preview_modal(
     if zone_timepoints:
         zone_colors = {
             "Start-Run": "#2ca02c",
-            "Start-Rampe": "#ff7f0e",
+            "Start-Ramp": "#ff7f0e",
             "Start-Plateau": "#9467bd",
             "Start-Oxidation": "#d62728",
             "End-Run": "#8c564b",
@@ -201,11 +226,19 @@ def show_preview_modal(
         xaxis_title="Time (s)",
         yaxis_title="CO2 (log scale, arb. units)",
         yaxis_type="log",
+        yaxis2=dict(
+            title="Temperature (°C)",
+            overlaying="y",
+            side="right",
+            showgrid=False,
+        ),
         template="plotly_white",
         margin=dict(l=40, r=20, t=40, b=30),
     )
 
-    preview_path = os.path.join(tempfile.gettempdir(), f"solitoc_preview_{os.getpid()}.html")
+    preview_path = os.path.join(
+        tempfile.gettempdir(), f"solitoc_preview_{os.getpid()}.html"
+    )
     plot_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
 
     result = {"choice": None}
@@ -222,7 +255,9 @@ def show_preview_modal(
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(b"<html><body><p>Selection recorded. You can close this tab.</p></body></html>")
+            self.wfile.write(
+                b"<html><body><p>Selection recorded. You can close this tab.</p></body></html>"
+            )
             try:
                 root.after(0, win.destroy)
                 self.server.shutdown()
@@ -276,7 +311,7 @@ def show_preview_modal(
 class MergedApp:
     """Tkinter application for batch processing SoliTOC files."""
 
-    def __init__(self, master: tk.Tk):
+    def __init__(self, master: tk.Tk):  # noqa: PLR0915
         self.master = master
         master.title("SoliTOC Processor")
         master.geometry("1000x800")
@@ -290,76 +325,103 @@ class MergedApp:
         input_frame.grid(row=0, column=0, sticky="ew", padx=4, pady=(0, 8))
         input_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(input_frame, text="Input TXT files or folder:").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Label(input_frame, text="Input TXT files or folder:").grid(
+            row=0, column=0, sticky="w", pady=4
+        )
         self.input_var = tk.StringVar()
         self.input_entry = ttk.Entry(input_frame, textvariable=self.input_var)
         self.input_entry.grid(row=0, column=1, sticky="ew", padx=4)
-        ToolTip(self.input_entry, "Enter one or more TXT files separated by semicolons, or choose a folder containing TXT files.")
-        self.browse_files_btn = ttk.Button(input_frame, text="Browse files", command=self.select_files)
+        ToolTip(
+            self.input_entry,
+            "Enter one or more TXT files separated by semicolons, or choose a folder containing TXT files.",
+        )
+        self.browse_files_btn = ttk.Button(
+            input_frame, text="Browse files", command=self.select_files
+        )
         self.browse_files_btn.grid(row=0, column=2, padx=(4, 2))
-        ToolTip(self.browse_files_btn, "Open a file picker to select one or more TXT input files.")
-        self.browse_folder_btn = ttk.Button(input_frame, text="Browse folder", command=self.select_folder)
+        ToolTip(
+            self.browse_files_btn,
+            "Open a file picker to select one or more TXT input files.",
+        )
+        self.browse_folder_btn = ttk.Button(
+            input_frame, text="Browse folder", command=self.select_folder
+        )
         self.browse_folder_btn.grid(row=0, column=3)
-        ToolTip(self.browse_folder_btn, "Choose a folder that contains the TXT files to process.")
+        ToolTip(
+            self.browse_folder_btn,
+            "Choose a folder that contains the TXT files to process.",
+        )
 
-        ttk.Label(input_frame, text="Output folder:").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(input_frame, text="Output folder:").grid(
+            row=1, column=0, sticky="w", pady=4
+        )
         self.out_var = tk.StringVar()
         self.out_entry = ttk.Entry(input_frame, textvariable=self.out_var)
         self.out_entry.grid(row=1, column=1, sticky="ew", padx=4)
-        ToolTip(self.out_entry, "Choose the folder where the processed CSV and summary files will be written.")
-        self.browse_out_btn = ttk.Button(input_frame, text="Browse...", command=self.select_out)
+        ToolTip(
+            self.out_entry,
+            "Choose the folder where the processed CSV and summary files will be written.",
+        )
+        self.browse_out_btn = ttk.Button(
+            input_frame, text="Browse...", command=self.select_out
+        )
         self.browse_out_btn.grid(row=1, column=2, columnspan=2, sticky="w")
-        ToolTip(self.browse_out_btn, "Select the output directory for the generated files.")
+        ToolTip(
+            self.browse_out_btn, "Select the output directory for the generated files."
+        )
 
-        ttk.Label(input_frame, text="Batch summary base name:").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Label(input_frame, text="Batch summary base name:").grid(
+            row=2, column=0, sticky="w", pady=4
+        )
         self.batch_summary_name_var = tk.StringVar()
-        self.batch_summary_name_entry = ttk.Entry(input_frame, textvariable=self.batch_summary_name_var)
+        self.batch_summary_name_entry = ttk.Entry(
+            input_frame, textvariable=self.batch_summary_name_var
+        )
         self.batch_summary_name_entry.grid(row=2, column=1, sticky="ew", padx=4)
-        ToolTip(self.batch_summary_name_entry, "Base name for the generated batch summary file.")
-
-        columns_frame = ttk.LabelFrame(frm, text="Column mapping", padding=(10, 10))
-        columns_frame.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
-        columns_frame.columnconfigure(1, weight=1)
-        columns_frame.columnconfigure(3, weight=1)
-
-        ttk.Label(columns_frame, text="Time col idx:").grid(row=0, column=0, sticky="w", pady=4)
-        self.time_col = ttk.Entry(columns_frame, width=6)
-        self.time_col.insert(0, "0")
-        self.time_col.grid(row=0, column=1, sticky="w")
-
-        ttk.Label(columns_frame, text="Temp col idx:").grid(row=0, column=2, sticky="w", padx=(12, 0))
-        self.temp_col = ttk.Entry(columns_frame, width=6)
-        self.temp_col.insert(0, "1")
-        self.temp_col.grid(row=0, column=3, sticky="w")
-
-        ttk.Label(columns_frame, text="CO2 col idx (-1 last):").grid(row=1, column=0, sticky="w", pady=4)
-        self.co2_col = ttk.Entry(columns_frame, width=6)
-        self.co2_col.insert(0, "-1")
-        self.co2_col.grid(row=1, column=1, sticky="w")
-
-        ttk.Label(columns_frame, text="Flow col idx:").grid(row=1, column=2, sticky="w", padx=(12, 0))
-        self.flow_col = ttk.Entry(columns_frame, width=6)
-        self.flow_col.insert(0, str(DEFAULT_FLOW_COL_IDX))
-        self.flow_col.grid(row=1, column=3, sticky="w")
+        ToolTip(
+            self.batch_summary_name_entry,
+            "Base name for the generated batch summary file.",
+        )
 
         baseline_frame = ttk.LabelFrame(frm, text="Baseline settings", padding=(10, 10))
-        baseline_frame.grid(row=2, column=0, sticky="ew", padx=4, pady=(0, 8))
+        baseline_frame.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
         baseline_frame.columnconfigure(1, weight=1)
         baseline_frame.columnconfigure(3, weight=1)
 
         ttk.Label(baseline_frame, text="Mode:").grid(row=0, column=0, sticky="w")
         self.baseline_mode = tk.StringVar(value="manual")
-        self.baseline_mode.trace_add("write", lambda *a: self._on_baseline_mode_change())
-        self.manual_radio = ttk.Radiobutton(baseline_frame, text="Manual", variable=self.baseline_mode, value="manual")
+        self.baseline_mode.trace_add(
+            "write", lambda *a: self._on_baseline_mode_change()
+        )
+        self.manual_radio = ttk.Radiobutton(
+            baseline_frame, text="Manual", variable=self.baseline_mode, value="manual"
+        )
         self.manual_radio.grid(row=0, column=1, sticky="w", padx=(0, 6))
-        self.fixed_radio = ttk.Radiobutton(baseline_frame, text="Fixed time interval", variable=self.baseline_mode, value="fixed")
+        self.fixed_radio = ttk.Radiobutton(
+            baseline_frame,
+            text="Fixed time interval",
+            variable=self.baseline_mode,
+            value="fixed",
+        )
         self.fixed_radio.grid(row=0, column=2, sticky="w", padx=(0, 6))
-        self.auto_radio = ttk.Radiobutton(baseline_frame, text="Auto-detect", variable=self.baseline_mode, value="auto")
+        self.auto_radio = ttk.Radiobutton(
+            baseline_frame,
+            text="Auto-detect",
+            variable=self.baseline_mode,
+            value="auto",
+        )
         self.auto_radio.grid(row=0, column=3, sticky="w", padx=(0, 6))
-        self.fixed_value_radio = ttk.Radiobutton(baseline_frame, text="Fixed Value", variable=self.baseline_mode, value="fixed_val")
+        self.fixed_value_radio = ttk.Radiobutton(
+            baseline_frame,
+            text="Fixed Value",
+            variable=self.baseline_mode,
+            value="fixed_val",
+        )
         self.fixed_value_radio.grid(row=0, column=4, sticky="w")
 
-        ttk.Label(baseline_frame, text="Manual baseline start:").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(baseline_frame, text="Manual baseline start:").grid(
+            row=1, column=0, sticky="w", pady=4
+        )
         self.man_start = ttk.Entry(baseline_frame, width=8)
         self.man_start.insert(0, str(DEFAULT_BASELINE_START))
         self.man_start.grid(row=1, column=1, sticky="w")
@@ -369,7 +431,9 @@ class MergedApp:
         self.man_end.insert(0, str(DEFAULT_BASELINE_END))
         self.man_end.grid(row=1, column=3, sticky="w")
 
-        ttk.Label(baseline_frame, text="Fixed time interval min:").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Label(baseline_frame, text="Fixed time interval min:").grid(
+            row=2, column=0, sticky="w", pady=4
+        )
         self.fixed_time_start = ttk.Entry(baseline_frame, width=8)
         self.fixed_time_start.insert(0, str(DEFAULT_FIXED_BASELINE[0]))
         self.fixed_time_start.grid(row=2, column=1, sticky="w")
@@ -379,12 +443,16 @@ class MergedApp:
         self.fixed_time_end.insert(0, str(DEFAULT_FIXED_BASELINE[1]))
         self.fixed_time_end.grid(row=2, column=3, sticky="w")
 
-        ttk.Label(baseline_frame, text="Fixed baseline val:").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Label(baseline_frame, text="Fixed baseline val:").grid(
+            row=3, column=0, sticky="w", pady=4
+        )
         self.fixed_val_entry = ttk.Entry(baseline_frame, width=8)
         self.fixed_val_entry.insert(0, str(DEFAULT_FIXED_VAL))
         self.fixed_val_entry.grid(row=3, column=1, sticky="w")
 
-        ttk.Label(baseline_frame, text="Auto search start:").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Label(baseline_frame, text="Auto search start:").grid(
+            row=4, column=0, sticky="w", pady=4
+        )
         self.auto_start = ttk.Entry(baseline_frame, width=8)
         self.auto_start.grid(row=4, column=1, sticky="w")
 
@@ -392,121 +460,147 @@ class MergedApp:
         self.auto_end = ttk.Entry(baseline_frame, width=8)
         self.auto_end.grid(row=4, column=3, sticky="w")
 
-        ttk.Label(baseline_frame, text="Auto window (s):").grid(row=3, column=2, sticky="w")
+        ttk.Label(baseline_frame, text="Auto window (s):").grid(
+            row=3, column=2, sticky="w"
+        )
         self.auto_win = ttk.Entry(baseline_frame, width=8)
         self.auto_win.insert(0, str(DEFAULT_AUTO_WINDOW))
         self.auto_win.grid(row=3, column=3, sticky="w")
 
         self.preview_var = tk.BooleanVar(value=DEFAULT_PREVIEW)
-        self.preview_check = ttk.Checkbutton(baseline_frame, text="Show baseline preview (skipped for fixed value)", variable=self.preview_var)
+        self.preview_check = ttk.Checkbutton(
+            baseline_frame,
+            text="Show baseline preview (skipped for fixed value)",
+            variable=self.preview_var,
+        )
         self.preview_check.grid(row=5, column=0, columnspan=5, sticky="w", pady=(8, 0))
 
         process_frame = ttk.LabelFrame(frm, text="Processing options", padding=(10, 10))
-        process_frame.grid(row=3, column=0, sticky="ew", padx=4, pady=(0, 8))
+        process_frame.grid(row=2, column=0, sticky="ew", padx=4, pady=(0, 8))
         process_frame.columnconfigure(1, weight=1)
         process_frame.columnconfigure(3, weight=1)
 
-        ttk.Label(process_frame, text="Shift points:").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Label(process_frame, text="Shift points (CO2 earlier):").grid(
+            row=0, column=0, sticky="w", pady=4
+        )
         self.shift = ttk.Entry(process_frame, width=8)
         self.shift.insert(0, str(DEFAULT_SHIFT))
         self.shift.grid(row=0, column=1, sticky="w")
 
-        self.shift_choice = tk.StringVar(value="co2")
-        self.shift_co2_radio = ttk.Radiobutton(process_frame, text="Shift CO2 earlier", variable=self.shift_choice, value="co2")
-        self.shift_co2_radio.grid(row=0, column=2, sticky="w", padx=(12, 0))
-        self.shift_temp_radio = ttk.Radiobutton(process_frame, text="Shift Temp forward", variable=self.shift_choice, value="temp")
-        self.shift_temp_radio.grid(row=0, column=3, sticky="w")
-
-        ttk.Label(process_frame, text="Integration start idx:").grid(row=1, column=0, sticky="w", pady=4)
-        self.int_start = ttk.Entry(process_frame, width=8)
-        self.int_start.insert(0, str(DEFAULT_INTEGRATION_START))
-        self.int_start.grid(row=1, column=1, sticky="w")
-
-        ttk.Label(process_frame, text="Factor (area→µgC):").grid(row=1, column=2, sticky="w", padx=(12, 0))
+        ttk.Label(process_frame, text="Factor (area→µgC):").grid(
+            row=0, column=2, sticky="w", padx=(12, 0)
+        )
         self.factor = ttk.Entry(process_frame, width=12)
         self.factor.insert(0, str(DEFAULT_FACTOR))
-        self.factor.grid(row=1, column=3, sticky="w")
+        self.factor.grid(row=0, column=3, sticky="w")
 
-        ttk.Label(process_frame, text="Temp interp every N points:").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Label(process_frame, text="Temp snapshot every (s):").grid(
+            row=1, column=0, sticky="w", pady=4
+        )
         self.interp_every = ttk.Entry(process_frame, width=8)
         self.interp_every.insert(0, str(DEFAULT_INTERP_EVERY))
-        self.interp_every.grid(row=2, column=1, sticky="w")
+        self.interp_every.grid(row=1, column=1, sticky="w")
 
-        ttk.Label(process_frame, text="Extrap. rate (°C/s):").grid(row=2, column=2, sticky="w", padx=(12, 0))
-        self.extrap_rate = ttk.Entry(process_frame, width=8)
-        self.extrap_rate.insert(0, str(DEFAULT_EXTRAP_RATE))
-        self.extrap_rate.grid(row=2, column=3, sticky="w")
+        ttk.Label(process_frame, text="Max Temp (°C):").grid(
+            row=1, column=2, sticky="w", padx=(12, 0)
+        )
+        self.max_temp = ttk.Entry(process_frame, width=8)
+        self.max_temp.insert(0, str(DEFAULT_MAX_ENERGY_TEMP))
+        self.max_temp.grid(row=1, column=3, sticky="w")
 
-        ttk.Label(process_frame, text="Cutoff temp (°C):").grid(row=3, column=0, sticky="w", pady=4)
-        self.cutoff_temp = ttk.Entry(process_frame, width=8)
-        self.cutoff_temp.insert(0, str(DEFAULT_CUTOFF_TEMP))
-        self.cutoff_temp.grid(row=3, column=1, sticky="w")
-
-        ttk.Label(process_frame, text="Optional integration T-interval Tmin,Tmax:").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Label(
+            process_frame, text="Optional integration T-interval Tmin,Tmax:"
+        ).grid(row=2, column=0, sticky="w", pady=4)
         self.tinterval = ttk.Entry(process_frame, width=22)
-        self.tinterval.grid(row=4, column=1, sticky="w")
-
-        ttk.Label(process_frame, text="Min plateau duration (s):").grid(row=4, column=2, sticky="w", padx=(12, 0))
-        self.zone_plateau_duration = ttk.Entry(process_frame, width=8)
-        self.zone_plateau_duration.insert(0, str(DEFAULT_ZONE_WINDOW))
-        self.zone_plateau_duration.grid(row=4, column=3, sticky="w")
+        self.tinterval.grid(row=2, column=1, sticky="w")
 
         action_frame = ttk.Frame(frm, padding=(0, 6))
-        action_frame.grid(row=4, column=0, sticky="ew", padx=4)
+        action_frame.grid(row=3, column=0, sticky="ew", padx=4)
         action_frame.columnconfigure(0, weight=1)
         action_frame.columnconfigure(1, weight=1)
 
-        self.start_btn = ttk.Button(action_frame, text="Start Processing", command=self.start_processing)
+        self.start_btn = ttk.Button(
+            action_frame, text="Start Processing", command=self.start_processing
+        )
         self.start_btn.grid(row=0, column=0, sticky="w", pady=4)
         self.quit_btn = ttk.Button(action_frame, text="Quit", command=master.quit)
         self.quit_btn.grid(row=0, column=1, sticky="e", pady=4)
 
         log_frame = ttk.LabelFrame(frm, text="Log / Status", padding=(10, 10))
-        log_frame.grid(row=5, column=0, sticky="nsew", padx=4, pady=(0, 4))
+        log_frame.grid(row=4, column=0, sticky="nsew", padx=4, pady=(0, 4))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
         self.log = tk.Text(log_frame, height=18, wrap="word")
         self.log.grid(row=0, column=0, sticky="nsew")
-        self.clear_log_btn = ttk.Button(log_frame, text="Clear Log", command=self.clear_log)
+        self.clear_log_btn = ttk.Button(
+            log_frame, text="Clear Log", command=self.clear_log
+        )
         self.clear_log_btn.grid(row=1, column=0, sticky="e", pady=(8, 0))
 
-        frm.rowconfigure(5, weight=1)
+        frm.rowconfigure(4, weight=1)
         self._setup_tooltips()
         self._on_baseline_mode_change()
 
     def _setup_tooltips(self) -> None:
-        ToolTip(self.input_entry, "Enter one or more TXT files separated by semicolons, or choose a folder containing TXT files.")
-        ToolTip(self.out_entry, "Choose the folder where the processed CSV and summary files will be written.")
-        ToolTip(self.batch_summary_name_entry, "Base name for the generated batch summary file.")
-        ToolTip(self.time_col, "Zero-based index of the time column in the input table.")
-        ToolTip(self.temp_col, "Zero-based index of the temperature column in the input table.")
-        ToolTip(self.co2_col, "Zero-based index of the CO2 column in the input table. Use -1 for the last column.")
-        ToolTip(self.flow_col, "Zero-based index of the flow column in the input table.")
+        ToolTip(
+            self.input_entry,
+            "Enter one or more TXT files separated by semicolons, or choose a folder containing TXT files.",
+        )
+        ToolTip(
+            self.out_entry,
+            "Choose the folder where the processed CSV and summary files will be written.",
+        )
+        ToolTip(
+            self.batch_summary_name_entry,
+            "Base name for the generated batch summary file.",
+        )
         ToolTip(self.manual_radio, "Use a manually chosen baseline time range.")
         ToolTip(self.fixed_radio, "Use a fixed baseline time interval.")
-        ToolTip(self.auto_radio, "Let the app automatically detect the best baseline window.")
-        ToolTip(self.fixed_value_radio, "Use a fixed baseline value instead of a time window.")
+        ToolTip(
+            self.auto_radio,
+            "Let the app automatically detect the best baseline window.",
+        )
+        ToolTip(
+            self.fixed_value_radio,
+            "Use a fixed baseline value instead of a time window.",
+        )
         ToolTip(self.man_start, "Start index for the manual baseline window.")
         ToolTip(self.man_end, "End index for the manual baseline window.")
         ToolTip(self.fixed_time_start, "Start of the fixed baseline time interval.")
         ToolTip(self.fixed_time_end, "End of the fixed baseline time interval.")
-        ToolTip(self.fixed_val_entry, "Baseline value to use when the fixed value mode is selected.")
+        ToolTip(
+            self.fixed_val_entry,
+            "Baseline value to use when the fixed value mode is selected.",
+        )
         ToolTip(self.auto_start, "Optional start limit for automatic baseline search.")
         ToolTip(self.auto_end, "Optional end limit for automatic baseline search.")
         ToolTip(self.auto_win, "Window size used when auto-detecting the baseline.")
-        ToolTip(self.preview_check, "Show the baseline preview before processing each file.")
-        ToolTip(self.shift, "Number of points to shift the CO2 or temperature series before integration.")
-        ToolTip(self.shift_co2_radio, "Shift the CO2 signal earlier in time.")
-        ToolTip(self.shift_temp_radio, "Shift the temperature signal forward in time.")
-        ToolTip(self.int_start, "Integration start index for the corrected signal.")
-        ToolTip(self.factor, "Conversion factor from integrated area to micrograms of carbon.")
-        ToolTip(self.interp_every, "Interpolate temperature every N points before processing.")
-        ToolTip(self.extrap_rate, "Temperature extrapolation rate used when filling gaps.")
-        ToolTip(self.cutoff_temp, "Temperature cutoff used for the integration window.")
-        ToolTip(self.tinterval, "Optional integration temperature interval as Tmin,Tmax.")
-        ToolTip(self.zone_plateau_duration, "Minimum duration required for each detected temperature plateau when defining zone boundaries.")
-        ToolTip(self.start_btn, "Start processing the selected files and write outputs.")
+        ToolTip(
+            self.preview_check, "Show the baseline preview before processing each file."
+        )
+        ToolTip(
+            self.shift,
+            "Number of points to shift the CO2 signal earlier before integration.",
+        )
+        ToolTip(
+            self.factor,
+            "Conversion factor from integrated area to micrograms of carbon.",
+        )
+        ToolTip(
+            self.interp_every,
+            "Snapshot spacing in seconds for temperature smoothing between Start-Ramp and Start-Plateau.",
+        )
+        ToolTip(
+            self.max_temp,
+            "Target maximum temperature at Start-Oxidation for Temperature_Energy.",
+        )
+        ToolTip(
+            self.tinterval, "Optional integration temperature interval as Tmin,Tmax."
+        )
+        ToolTip(
+            self.start_btn, "Start processing the selected files and write outputs."
+        )
         ToolTip(self.quit_btn, "Close the application.")
 
     def clear_log(self) -> None:
@@ -529,7 +623,9 @@ class MergedApp:
         self.auto_win.config(state=state_auto)
 
     def select_files(self) -> None:
-        paths = filedialog.askopenfilenames(title="Select TXT files", filetypes=[("TXT files", "*.txt")])
+        paths = filedialog.askopenfilenames(
+            title="Select TXT files", filetypes=[("TXT files", "*.txt")]
+        )
         if paths:
             self.input_var.set(";".join(paths))
 
@@ -548,7 +644,7 @@ class MergedApp:
         self.log.see(tk.END)
         self.master.update_idletasks()
 
-    def start_processing(self) -> None:
+    def start_processing(self) -> None:  # noqa: PLR0912, PLR0915
         in_text = self.input_var.get().strip()
         out_dir = self.out_var.get().strip()
         if not in_text:
@@ -559,7 +655,11 @@ class MergedApp:
             return
 
         if os.path.isdir(in_text):
-            files = [os.path.join(in_text, f) for f in os.listdir(in_text) if f.lower().endswith(".txt")]
+            files = [
+                os.path.join(in_text, f)
+                for f in os.listdir(in_text)
+                if f.lower().endswith(".txt")
+            ]
         else:
             files = [f for f in in_text.split(";") if f.strip()]
         files = [f for f in files if os.path.isfile(f)]
@@ -569,10 +669,6 @@ class MergedApp:
             return
 
         try:
-            time_col = int(self.time_col.get())
-            temp_col = int(self.temp_col.get())
-            co2_col = int(self.co2_col.get())
-            flow_col = int(self.flow_col.get())
             man_start = int(self.man_start.get())
             man_end = int(self.man_end.get())
             baseline_mode = self.baseline_mode.get()
@@ -586,13 +682,9 @@ class MergedApp:
             auto_win = float(self.auto_win.get())
             preview_on = bool(self.preview_var.get())
             shift_pts = int(self.shift.get())
-            shift_co2 = self.shift_choice.get() == "co2"
-            int_start = int(self.int_start.get())
             factor = float(self.factor.get())
-            interp_every = int(self.interp_every.get())
-            extrap_rate = float(self.extrap_rate.get())
-            cutoff_temp = float(self.cutoff_temp.get())
-            zone_plateau_min_duration = float(self.zone_plateau_duration.get())
+            interp_every = float(self.interp_every.get())
+            max_temp = float(self.max_temp.get())
 
             tinterval_txt = self.tinterval.get().strip()
             temp_interval = None
@@ -607,27 +699,29 @@ class MergedApp:
             os.makedirs(os.path.join(out_dir, sub), exist_ok=True)
 
         summary_rows = []
+        thermogram_exports = []
         for f in files:
             self.log_msg(f"Processing: {f}")
             try:
-                header_line, time_arr, co2_arr, bval, bi0, bi1, df_preview = compute_baseline_and_preview_data(
-                    f,
-                    time_col,
-                    temp_col,
-                    co2_col,
-                    baseline_mode,
-                    manual_baseline=(man_start, man_end),
-                    fixed_baseline=(fixed_time_start, fixed_time_end),
-                    auto_search_range=(auto_s, auto_e),
-                    auto_window_size=auto_win,
-                    fixed_val=fixed_val_input,
+                header_line, time_arr, co2_arr, bval, bi0, bi1, df_preview = (
+                    compute_baseline_and_preview_data(
+                        f,
+                        0,
+                        1,
+                        -1,
+                        baseline_mode,
+                        manual_baseline=(man_start, man_end),
+                        fixed_baseline=(fixed_time_start, fixed_time_end),
+                        auto_search_range=(auto_s, auto_e),
+                        auto_window_size=auto_win,
+                        fixed_val=fixed_val_input,
+                    )
                 )
 
                 zone_timepoints = None
                 try:
-                    ncols = df_preview.shape[1]
-                    resolved_temp_col = temp_col if temp_col >= 0 else ncols + temp_col
-                    resolved_flow_col = flow_col if flow_col >= 0 else ncols + flow_col
+                    resolved_temp_col = 1
+                    resolved_flow_col = DEFAULT_FLOW_COL_IDX
                     temp_arr = df_preview.iloc[:, resolved_temp_col].to_numpy()
                     flow_arr = df_preview.iloc[:, resolved_flow_col].to_numpy()
                     program_meta = parse_program_metadata(f, header_line=header_line)
@@ -635,7 +729,6 @@ class MergedApp:
                         time_arr,
                         temp_arr,
                         flow_arr,
-                        plateau_window_size=zone_plateau_min_duration,
                         flow_relative_increase=DEFAULT_ZONE_FLOW_RELATIVE_INCREASE,
                         ramp_reference_time=program_meta.get("b_d3_time_s"),
                         c4_seconds=program_meta.get("c4_s"),
@@ -643,7 +736,9 @@ class MergedApp:
                     # Baseline preview is shown in CO2 time space, so shift only internal phase markers.
                     # Keep run start/end anchored to the original file boundaries.
                     zone_timepoints = {
-                        name: float(ts if name in {"Start-Run", "End-Run"} else ts + shift_pts)
+                        name: float(
+                            ts if name in {"Start-Run", "End-Run"} else ts + shift_pts
+                        )
                         for name, ts in zone_boundaries["times"].items()
                     }
                 except Exception as exc:
@@ -654,11 +749,13 @@ class MergedApp:
                         self.master,
                         time_arr,
                         co2_arr,
+                        temp_arr,
                         bval,
                         bi0,
                         bi1,
                         filename=f,
                         omit_below=100.0,
+                        preview_shift_seconds=shift_pts,
                         zone_timepoints=zone_timepoints,
                     )
                     if not decision:
@@ -672,10 +769,10 @@ class MergedApp:
                 res = process_file(
                     f,
                     out_dir,
-                    time_col_index=time_col,
-                    temp_col_index=temp_col,
-                    co2_col_index=co2_col,
-                    flow_col_index=flow_col,
+                    time_col_index=0,
+                    temp_col_index=1,
+                    co2_col_index=-1,
+                    flow_col_index=DEFAULT_FLOW_COL_IDX,
                     baseline_mode=baseline_mode,
                     manual_baseline=(man_start, man_end),
                     fixed_baseline=(fixed_time_start, fixed_time_end),
@@ -683,45 +780,28 @@ class MergedApp:
                     auto_window_size=auto_win,
                     fixed_val=fixed_val_input,
                     shift=shift_pts,
-                    shift_co2=shift_co2,
-                    integration_start=int_start,
                     factor=factor,
                     interp_every=interp_every,
-                    extrap_rate=extrap_rate,
-                    cutoff_temp=cutoff_temp,
+                    max_energy_temp=max_temp,
                     temp_interval=temp_interval,
-                    zone_plateau_min_duration=zone_plateau_min_duration,
                     zone_flow_relative_increase=DEFAULT_ZONE_FLOW_RELATIVE_INCREASE,
                 )
                 base_name = res.get("basefn", os.path.splitext(os.path.basename(f))[0])
-                summary_rows.append(
-                    {
-                        "file": base_name,
-                        "area": res.get("area"),
-                        "ugC": res.get("ugC"),
-                        "sample_weight_mg": res.get("sample_weight_mg"),
-                        "TOC_mgC": res.get("TOC_mgC"),
-                        "TOC_wtpercent": res.get("TOC_wtpercent"),
-                        "user_pctC": res.get("user_pctC"),
-                        "pyro_heat_rate_c_per_min": res.get("pyro_heat_rate_c_per_min"),
-                        "c1_s": res.get("c1_s"),
-                        "c4_s": res.get("c4_s"),
-                        "b_d3_time_s": res.get("b_d3_time_s"),
-                        "mean_temp_co2": res.get("mean_temp_co2"),
-                        "std_dev_temp_co2": res.get("std_dev_temp_co2"),
-                        **res.get("zone_timepoints", {}),
-                    }
-                )
+                summary_rows.append(format_batch_summary_row(res, base_name))
+                thermogram_df = res.get("thermogram_df")
+                if isinstance(thermogram_df, pd.DataFrame):
+                    thermogram_exports.append((base_name, thermogram_df))
             except Exception as exc:
                 self.log_msg(f"ERROR processing {f}: {exc}")
 
         if summary_rows:
-            df_sum = pd.DataFrame(summary_rows)
-            batch_base_name = (self.batch_summary_name_var.get() or "batch_summary").strip()
-            batch_base_name = re.sub(r"[^A-Za-z0-9._ -]+", "_", batch_base_name).strip().strip(" .") or "batch_summary"
-            batch_path = get_unique_output_path(os.path.join(out_dir, f"{batch_base_name}_batch_summary.csv"))
-            df_sum.to_csv(batch_path, index=False)
-            self.log_msg(f"Batch summary: {batch_path}")
+            batch_base_name = (
+                self.batch_summary_name_var.get() or "batch_summary"
+            ).strip()
+            paths = write_batch_exports(
+                Path(out_dir), batch_base_name, summary_rows, thermogram_exports
+            )
+            self.log_msg(f"Batch summary: {paths['batch_csv_path']}")
         else:
             self.log_msg("No files processed.")
         self.log_msg("Done.")

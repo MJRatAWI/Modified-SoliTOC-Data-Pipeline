@@ -1,7 +1,9 @@
 from pathlib import Path
+
 from kedro.framework.startup import bootstrap_project
 
 from my_pipeline.pipeline_registry import register_pipelines
+
 
 class TestKedroRun:
     def test_default_pipeline_is_registered(self):

@@ -19,11 +19,7 @@ analysis:
   auto_window_size: 600
   fixed_val: 1000.0
   shift: 88
-  shift_co2: true
-  integration_start: 1800
   factor: 0.000012563
   interp_every: 100
-  extrap_rate: 0.01
-  cutoff_temp: 898.0
-  zone_plateau_min_duration: 60.0
+  max_energy_temp: 900.0
   zone_flow_relative_increase: 0.25
