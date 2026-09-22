@@ -313,7 +313,7 @@ class MergedApp:
 
     def __init__(self, master: tk.Tk):  # noqa: PLR0915
         self.master = master
-        master.title("SoliTOC Processor")
+        master.title("Modified SoliTOC Data Pipeline")
         master.geometry("1000x800")
 
         frm = ttk.Frame(master, padding=12)

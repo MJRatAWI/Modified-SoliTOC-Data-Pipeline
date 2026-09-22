@@ -1,4 +1,4 @@
-# my-pipeline
+# Modified SoliTOC Data Pipeline
 
 SoliTOC processing pipeline with two execution paths:
 

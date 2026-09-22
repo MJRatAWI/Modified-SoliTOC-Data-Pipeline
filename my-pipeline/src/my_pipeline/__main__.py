@@ -1,4 +1,4 @@
-"""my-pipeline file for ensuring the package is executable
+"""Modified SoliTOC Data Pipeline entry point for ensuring the package is executable
 as `my-pipeline` and `python -m my_pipeline`
 """
 import sys
