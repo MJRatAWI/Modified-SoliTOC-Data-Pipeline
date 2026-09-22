@@ -1,101 +1,106 @@
 # my-pipeline
 
-[![Powered by Kedro](https://img.shields.io/badge/powered_by-kedro-ffc900?logo=kedro)](https://kedro.org)
+SoliTOC processing pipeline with two execution paths:
 
-## Overview
+1. GUI app for interactive preview and batch processing.
+2. Kedro pipeline for repeatable batch runs.
 
-This is your new Kedro project, which was generated using `kedro 1.0.0`.
+## Current Workflow
 
-Take a look at the [Kedro documentation](https://docs.kedro.org) to get started.
+1. Parse TXT file data and header metadata.
+2. Extract program metadata from header and B-line markers:
+	- Pyro heat rate (degC/min)
+	- C1 (s)
+	- C4 (s)
+	- B-line D3-like reference time (s)
+3. Compute baseline (manual, fixed interval, auto, or fixed value).
+4. Baseline-correct CO2.
+5. Apply CO2 lag shift (CO2 earlier by shift points).
+6. Build temperature profiles linked to time:
+	- Temperature_thermogram
+	- Temperature_Energy
+7. Detect zone boundaries:
+	- Start-Run
+	- Start-Ramp (from B-line D3-like marker)
+	- Start-Plateau (Start-Oxidation - C4)
+	- Start-Oxidation (flow-lance rise)
+	- End-Run
+8. Integrate CO2 from Start-Ramp onward and compute output metrics.
+9. Write per-file thermogram CSV + RP-input CSV + summary text, plus batch summary CSV/XLSX and thermogram workbook.
 
-## Rules and guidelines
+## Canonical Output Schema
 
-In order to get the best out of the template:
+Thermogram CSV columns:
 
-* Don't remove any lines from the `.gitignore` file we provide
-* Make sure your results can be reproduced by following a data engineering convention
-* Don't commit data to your repository
-* Don't commit any credentials or your local configuration to your repository. Keep all your credentials and local configuration in `conf/local/`
+1. time_s
+2. temp_raw
+3. Temperature_thermogram
+4. Temperature_Energy
+5. co2_raw
+6. co2_baseline_corrected
+7. co2_shifted
+8. flow_lance_ml_min
+9. pyro_heat_rate_c_per_min
+10. c1_s
+11. c4_s
+12. zone
+13. co2_normalized
 
-## How to install dependencies
+Batch summary CSV fields include at least:
 
-Declare any dependencies in `requirements.txt` for `pip` installation.
+1. file
+2. area
+3. ugC/sample
+4. sample weight [mg]
+5. TOC [mgC]
+6. TOC [wt.%]
+7. Heat rate [C]
+8. C1 [s]
+9. C4 [s]
+10. mean temperature pyrolysis [C]
+11. std-div temperature pyrolysis [C]
+12. Start-Run [s]
+13. Start-Ramp [s]
+14. Start-Plateau [s]
+15. Start-Oxidation [s]
+16. End-Run [s]
 
-To install them, run:
+## Preview Behavior
 
-```
+Baseline preview shows zone markers in CO2-time visualization space:
+
+1. Start-Run and End-Run are not shifted.
+2. Internal markers are shown with +shift points.
+
+## Removed / Deprecated Behavior
+
+1. Temperature-forward shift option in GUI is removed.
+2. Temperature-shifted output column is removed.
+3. Plateau-duration tuning parameter is removed from active workflow.
+4. Legacy temperature-plateau helpers for zone-start detection are removed from active code.
+
+## Run
+
+Install dependencies:
+
+```bash
 pip install -r requirements.txt
 ```
 
-## How to run your Kedro pipeline
+Run GUI:
 
-You can run your Kedro project with:
-
+```bash
+python app.py
 ```
+
+Run Kedro pipeline:
+
+```bash
 kedro run
 ```
 
-## How to test your Kedro project
+Run tests:
 
-Have a look at the file `tests/test_run.py` for instructions on how to write your tests. You can run your tests as follows:
-
-```
+```bash
 pytest
 ```
-
-You can configure the coverage threshold in your project's `pyproject.toml` file under the `[tool.coverage.report]` section.
-
-
-## Project dependencies
-
-To see and update the dependency requirements for your project use `requirements.txt`. You can install the project requirements with `pip install -r requirements.txt`.
-
-[Further information about project dependencies](https://docs.kedro.org/en/stable/kedro_project_setup/dependencies.html#project-specific-dependencies)
-
-## How to work with Kedro and notebooks
-
-> Note: Using `kedro jupyter` or `kedro ipython` to run your notebook provides these variables in scope: `context`, 'session', `catalog`, and `pipelines`.
->
-> Jupyter, JupyterLab, and IPython are already included in the project requirements by default, so once you have run `pip install -r requirements.txt` you will not need to take any extra steps before you use them.
-
-### Jupyter
-To use Jupyter notebooks in your Kedro project, you need to install Jupyter:
-
-```
-pip install jupyter
-```
-
-After installing Jupyter, you can start a local notebook server:
-
-```
-kedro jupyter notebook
-```
-
-### JupyterLab
-To use JupyterLab, you need to install it:
-
-```
-pip install jupyterlab
-```
-
-You can also start JupyterLab:
-
-```
-kedro jupyter lab
-```
-
-### IPython
-And if you want to run an IPython session:
-
-```
-kedro ipython
-```
-
-### How to ignore notebook output cells in `git`
-To automatically strip out all output cell contents before committing to `git`, you can use tools like [`nbstripout`](https://github.com/kynan/nbstripout). For example, you can add a hook in `.git/config` with `nbstripout --install`. This will run `nbstripout` before anything is committed to `git`.
-
-> *Note:* Your output cells will be retained locally.
-
-## Package your Kedro project
-
-[Further information about building project documentation and packaging your project](https://docs.kedro.org/en/stable/tutorial/package_a_project.html)

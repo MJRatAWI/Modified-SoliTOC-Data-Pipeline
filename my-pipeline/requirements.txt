@@ -2,3 +2,6 @@ ipython>=8.10
 jupyterlab>=3.0
 notebook
 kedro~=1.0.0
+numpy>=2.0.2
+pandas>=2.3.3
+plotly>=5.24.0
