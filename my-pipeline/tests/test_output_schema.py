@@ -6,10 +6,23 @@ from pathlib import Path
 
 import pandas as pd
 
-from my_pipeline.nodes.nodes import process_file, run_zone_analysis
+from my_pipeline.nodes.nodes import get_new_base_filename, process_file, run_zone_analysis
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEST_DATA_DIR = PROJECT_ROOT / "data" / "01_input" / "test_data"
+
+
+def test_header_fraction_does_not_create_nested_output_path() -> None:
+    header = (
+        "#  Sample no 5 : EastRiverSPM-1 1/16 142um 1mg; "
+        "3x7 dc 0.5M HCl 60C; Pyro 15 HZ C1 1500s C4 600s"
+    )
+
+    base_name = get_new_base_filename(header, "fallback")
+
+    assert base_name == "EastRiverSPM-1 1_16 142um"
+    assert "/" not in base_name
+    assert "\\" not in base_name
 
 
 def test_thermogram_csv_uses_canonical_schema() -> None:

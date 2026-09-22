@@ -235,9 +235,14 @@ def get_new_base_filename(header_line: str, fallback_name: str) -> str:
     name_match = re.search(r"^(.*?)\s+\d+(?:\.\d+)?mg;", part_b)
 
     if name_match:
-        return name_match.group(1).strip()
+        extracted_name = name_match.group(1).strip()
     else:
-        return part_b
+        extracted_name = part_b
+
+    # Header names can contain sample notation such as "1/16". Keep the
+    # notation readable while preventing it from becoming a nested path.
+    safe_name = re.sub(r'[<>:"/\\|?*]', "_", extracted_name).strip(" .")
+    return safe_name or fallback_name
 
 
 def extract_sample_weight_mg(header_line: str) -> float | None:
