@@ -9,6 +9,8 @@ Authors: 	Manuel Ruben (manuel.ruben@awi.de)
 
 Version: 	1.0.0
 
+Python:  3.13.13
+
 Release: 	1st October 2026
 
 License: 	GNU GPL v3 (or greater)
