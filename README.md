@@ -5,7 +5,7 @@ The Modified-SoliTOC-Data-Pipeline is an automated data analysis tool for the mo
 
 Package Information
 
-Authors: 	Manuel Ruben (manuel.ruben@awi.de)
+Corresponding Author: 	Manuel Ruben (manuel.ruben@awi.de)
 
 Version: 	1.0.0
 
