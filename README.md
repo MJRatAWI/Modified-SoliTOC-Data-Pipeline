@@ -15,14 +15,14 @@ Release: 	1st October 2026
 
 License: 	GNU GPL v3 (or greater)
 
-URL:		https://github.com/MJRatAWI/Modified-SoliTOC-Data-Pipeline 
+URL:		  https://github.com/MJRatAWI/Modified-SoliTOC-Data-Pipeline 
 
-DOI:		10.5281/zenodo.23078601 
+DOI:		  10.5281/zenodo.23078601 
+
+Citation:  Ruben, M., Höhn, M., Türke, A. (2026). Modified-SoliTOC-Data-Pipeline. https://doi.org/10.5281/zenodo.23078601
 
 
-
-
-How to use
+How to use:
 
 The application is built as a Kedro project (https://kedro.org/) embedded into a graphical user interface (GUI), allowing for batch analysis. To use the code successfully, the “name column” in the modified SoliTOC needs to be in a specific format, please use provided the excel template for this purpose. Further information are provided as comments in the excel sheet. Default parameters in the GUI should not be change, if not otherwise instructed by the modified-SoliTOC personal. Detailed information can be found in the my-pipeline readme under RUN.
 
